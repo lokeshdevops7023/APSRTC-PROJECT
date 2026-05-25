@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<EOF
+Usage: $0 -s SIZE -a AVAILABILITY_ZONE -t VOLUME_TYPE [-i IOPS] [-n NAME] [-k KMS_KEY_ID]
+
+Options:
+  -s SIZE               Volume size in GiB
+  -a AVAILABILITY_ZONE  Availability zone for the volume
+  -t VOLUME_TYPE        Volume type (gp2, gp3, io1, io2, st1, sc1)
+  -i IOPS               Provisioned IOPS for io1/io2 or gp3 volumes
+  -n NAME               Name tag for the volume
+  -k KMS_KEY_ID         KMS key ID for encryption (optional)
+EOF
+  exit 1
+}
+
+size=""
+az=""
+type=""
+iops=""
+name=""
+kms_key_id=""
+
+while getopts ":s:a:t:i:n:k:" opt; do
+  case ${opt} in
+    s) size=${OPTARG} ;;
+    a) az=${OPTARG} ;;
+    t) type=${OPTARG} ;;
+    i) iops=${OPTARG} ;;
+    n) name=${OPTARG} ;;
+    k) kms_key_id=${OPTARG} ;;
+    *) usage ;;
+  esac
+done
+
+if [[ -z "$size" || -z "$az" || -z "$type" ]]; then
+  usage
+fi
+
+if [[ "$type" == "io1" || "$type" == "io2" || "$type" == "gp3" ]]; then
+  if [[ -z "$iops" ]]; then
+    echo "Error: IOPS is required for volume type $type." >&2
+    usage
+  fi
+fi
+
+cmd=(aws ec2 create-volume --size "$size" --availability-zone "$az" --volume-type "$type")
+
+if [[ -n "$iops" ]]; then
+  cmd+=(--iops "$iops")
+fi
+
+if [[ -n "$kms_key_id" ]]; then
+  cmd+=(--kms-key-id "$kms_key_id" --encrypted)
+fi
+
+output=$("${cmd[@]}" --query 'VolumeId' --output text)
+
+if [[ -n "$name" ]]; then
+  aws ec2 create-tags --resources "$output" --tags Key=Name,Value="$name"
+fi
+
+echo "Created EBS volume: $output"
+aws ec2 wait volume-available --volume-ids "$output"
+echo "Volume is now available."
